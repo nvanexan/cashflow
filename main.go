@@ -13,11 +13,12 @@ import (
 )
 
 type Transaction struct {
-	Date        time.Time
-	Type        string
-	Amount      float64
-	Description string
-	Tags        []string
+	Date            time.Time
+	Type            string
+	Amount          float64
+	Description     string
+	Tags            []string
+	ProjectedAmount *float64 // nil if not specified
 }
 
 // CLI flags
@@ -82,7 +83,8 @@ func parseSimpleMarkdown(filename string) ([]Transaction, error) {
 	scanner := bufio.NewScanner(file)
 
 	dateRegex := regexp.MustCompile(`^#\s+(\d{4}-\d{2}-\d{2})$`)
-	txnRegex := regexp.MustCompile(`^([+-])\s*([\d.]+)\s+(.+?)(?:\s+\[(.+)\])?$`)
+	// Matches: - 9.49 Coffee [Tag1, Tag2] (5.20)
+	txnRegex := regexp.MustCompile(`^([+-])\s*([\d.]+)\s+(.+?)(?:\s+\[([^\]]+)\])?(?:\s+\(([\d.]+)\))?$`)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -98,7 +100,7 @@ func parseSimpleMarkdown(filename string) ([]Transaction, error) {
 			continue
 		}
 
-		if matches := txnRegex.FindStringSubmatch(line); len(matches) >= 4 {
+		if matches := txnRegex.FindStringSubmatch(line); len(matches) >= 3 {
 			sign := matches[1]
 			amount, err := strconv.ParseFloat(matches[2], 64)
 			if err != nil {
@@ -108,23 +110,33 @@ func parseSimpleMarkdown(filename string) ([]Transaction, error) {
 				amount = -amount
 			}
 
-			description := matches[3]
+			description := strings.TrimSpace(matches[3])
 			tags := []string{}
-			if len(matches) == 5 && matches[4] != "" {
+			if len(matches) >= 5 && matches[4] != "" {
 				tags = strings.Split(matches[4], ",")
 				for i := range tags {
 					tags[i] = strings.TrimSpace(tags[i])
 				}
 			}
 
+			var projectedAmount *float64
+			if len(matches) >= 6 && matches[5] != "" {
+				p, err := strconv.ParseFloat(matches[5], 64)
+				if err == nil {
+					projectedAmount = &p
+				}
+			}
+
 			transactions = append(transactions, Transaction{
-				Date:        currentDate,
-				Type:        map[bool]string{true: "income", false: "expense"}[amount >= 0],
-				Amount:      amount,
-				Description: description,
-				Tags:        tags,
+				Date:            currentDate,
+				Type:            map[bool]string{true: "income", false: "expense"}[amount >= 0],
+				Amount:          amount,
+				Description:     description,
+				Tags:            tags,
+				ProjectedAmount: projectedAmount,
 			})
 		}
+
 	}
 
 	return transactions, scanner.Err()
@@ -254,14 +266,23 @@ func buildProjection(original []Transaction, adjust string, remove string) Proje
 		}
 
 		adjustedTxn := txn
-		for _, tag := range txn.Tags {
-			if adj, ok := adjustMap[tag]; ok {
-				adjustedTxn.Amount *= (1.0 + adj)
-				break
+
+		// If an inline projected amount is given, use it directly
+		if txn.ProjectedAmount != nil {
+			// Preserve original sign
+			adjustedTxn.Amount = float64(signum(txn.Amount)) * (*txn.ProjectedAmount)
+		} else {
+			// Apply tag-based adjustment
+			for _, tag := range txn.Tags {
+				if adj, ok := adjustMap[tag]; ok {
+					adjustedTxn.Amount *= (1.0 + adj)
+					break
+				}
 			}
 		}
 
 		projected = append(projected, adjustedTxn)
+
 	}
 
 	return Projection{
@@ -433,5 +454,66 @@ func exportProjectionMarkdown(p Projection, filename string) error {
 		}
 	}
 
+	w("\n## Transactions by Date\n\n")
+
+	// Group transactions by date
+	byDate := map[string][]struct {
+		Original  Transaction
+		Projected Transaction
+	}{}
+
+	for i := range p.Original {
+		dateStr := p.Original[i].Date.Format("2006-01-02")
+		byDate[dateStr] = append(byDate[dateStr], struct {
+			Original  Transaction
+			Projected Transaction
+		}{
+			Original:  p.Original[i],
+			Projected: p.Projected[i],
+		})
+	}
+
+	// Sorted date keys
+	var dates []string
+	for d := range byDate {
+		dates = append(dates, d)
+	}
+	sort.Strings(dates)
+
+	for _, date := range dates {
+		w("### %s\n\n", date)
+		w("| Description | Original | Projected | Tags |\n")
+		w("|-------------|----------|-----------|------|\n")
+
+		for _, pair := range byDate[date] {
+			o := pair.Original
+			pj := pair.Projected
+
+			// Use projected amount if it differs
+			tags := strings.Join(o.Tags, ", ")
+			w("| %s | %.2f | %.2f | %s |\n",
+				o.Description,
+				abs(o.Amount),
+				abs(pj.Amount),
+				tags,
+			)
+		}
+		w("\n")
+	}
+
 	return nil
+}
+
+func abs(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func signum(v float64) int {
+	if v < 0 {
+		return -1
+	}
+	return 1
 }
