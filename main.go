@@ -29,6 +29,7 @@ var (
 	removeTags     string
 	adjustTags     string
 	exportMarkdown string
+	file           string
 )
 
 func init() {
@@ -39,12 +40,13 @@ func init() {
 	flag.StringVar(&removeTags, "remove", "", "Comma-separated tags to remove")
 	flag.StringVar(&adjustTags, "adjust", "", "Tag adjustments e.g. Food=-0.5,Salary=0.1")
 	flag.StringVar(&exportMarkdown, "export-md", "", "Export side-by-side projection as a Markdown file")
+	flag.StringVar(&file, "file", "sample-cashflow.md", "Cashflow markdown file to process")
 }
 
 func main() {
 	flag.Parse()
 
-	transactions, err := parseSimpleMarkdown("sample-cashflow.md")
+	transactions, err := parseSimpleMarkdown(file)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
