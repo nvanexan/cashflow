@@ -56,7 +56,7 @@ func main() {
 	transactions = applyFilters(transactions)
 	printSummary(transactions)
 
-	projection := buildProjection(transactions, adjustTags, removeTags)
+	projection := buildProjection(transactions, adjustTags)
 	printSideBySide(projection)
 
 	if exportMarkdown != "" {
@@ -162,7 +162,14 @@ func applyFilters(transactions []Transaction) []Transaction {
 		}
 	}
 
+	// ✅ Parse remove tags once
+	removeSet := parseRemovals(removeTags)
+
 	for _, txn := range transactions {
+		// ✅ Skip if any tag matches remove set
+		if hasAnyTag(txn, removeSet) {
+			continue
+		}
 		if filterTag != "" && !hasTag(txn, filterTag) {
 			continue
 		}
@@ -251,19 +258,14 @@ type Projection struct {
 	Original  []Transaction
 	Projected []Transaction
 	AdjustMap map[string]float64
-	RemoveSet map[string]bool
 }
 
-func buildProjection(original []Transaction, adjust string, remove string) Projection {
+func buildProjection(original []Transaction, adjust string) Projection {
 	adjustMap := parseAdjustments(adjust)
-	removeSet := parseRemovals(remove)
 
 	var projected []Transaction
 
 	for _, txn := range original {
-		if hasAnyTag(txn, removeSet) {
-			continue
-		}
 
 		adjustedTxn := txn
 
@@ -289,7 +291,6 @@ func buildProjection(original []Transaction, adjust string, remove string) Proje
 		Original:  original,
 		Projected: projected,
 		AdjustMap: adjustMap,
-		RemoveSet: removeSet,
 	}
 }
 
@@ -314,7 +315,7 @@ func parseAdjustments(s string) map[string]float64 {
 func parseRemovals(s string) map[string]bool {
 	out := map[string]bool{}
 	for _, tag := range strings.Split(s, ",") {
-		tag = strings.TrimSpace(tag)
+		tag = strings.TrimSpace(strings.ToLower(tag))
 		if tag != "" {
 			out[tag] = true
 		}
@@ -324,7 +325,7 @@ func parseRemovals(s string) map[string]bool {
 
 func hasAnyTag(txn Transaction, tagSet map[string]bool) bool {
 	for _, tag := range txn.Tags {
-		if tagSet[tag] {
+		if tagSet[strings.ToLower(tag)] {
 			return true
 		}
 	}
