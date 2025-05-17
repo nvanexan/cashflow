@@ -197,9 +197,10 @@ func printSummary(transactions []Transaction) {
 	fmt.Printf("\nTotal Income:  %.2f\n", incomeTotal)
 	fmt.Printf("Total Expenses: %.2f\n", -expenseTotal)
 	fmt.Printf("Net:            %.2f\n\n", incomeTotal+expenseTotal)
-	fmt.Println("")
 
 	printTagSummary(transactions)
+
+	fmt.Println()
 }
 
 func printTagSummary(transactions []Transaction) {
