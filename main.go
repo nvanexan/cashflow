@@ -220,6 +220,9 @@ func printSummary(transactions []Transaction) {
 	fmt.Printf("Net:            %.2f\n\n", incomeTotal+expenseTotal)
 
 	printTagSummary(transactions)
+	fmt.Println()
+
+	printHighImpactTags(transactions, 10) // Top 10 by default
 
 	fmt.Println()
 }
@@ -251,6 +254,88 @@ func printTagSummary(transactions []Transaction) {
 			category = "Expense"
 		}
 		fmt.Printf("  [%s] %s: %.2f\n", tag, category, total)
+	}
+	// Create a slice of tag-total pairs
+	// type tagTotal struct {
+	// 	tag   string
+	// 	total float64
+	// }
+	// tagTotals := make([]tagTotal, 0, len(tagSums))
+	// for tag, total := range tagSums {
+	// 	tagTotals = append(tagTotals, tagTotal{tag, total})
+	// }
+	//
+	// // Sort by total in descending order
+	// sort.Slice(tagTotals, func(i, j int) bool {
+	// 	return tagTotals[i].total > tagTotals[j].total
+	// })
+	//
+	// // Print sorted results
+	// for _, tt := range tagTotals {
+	// 	category := "Income"
+	// 	if tt.total < 0 {
+	// 		category = "Expense"
+	// 	}
+	// 	fmt.Printf("  [%s] %s: %.2f\n", tt.tag, category, tt.total)
+	// }
+}
+
+func printHighImpactTags(transactions []Transaction, topN int) {
+	type tagStats struct {
+		Tag       string
+		Total     float64
+		Count     int
+		AvgPerTxn float64
+	}
+
+	tagData := make(map[string]*tagStats)
+
+	for _, txn := range transactions {
+		if txn.Amount >= 0 {
+			continue // Skip income
+		}
+		tags := txn.Tags
+		if len(tags) == 0 {
+			tags = []string{"_untagged_"}
+		}
+		for _, tag := range tags {
+			if stat, exists := tagData[tag]; exists {
+				stat.Total += txn.Amount
+				stat.Count++
+			} else {
+				tagData[tag] = &tagStats{
+					Tag:   tag,
+					Total: txn.Amount,
+					Count: 1,
+				}
+			}
+		}
+	}
+
+	// Convert map to slice
+	var stats []tagStats
+	for _, stat := range tagData {
+		stat.AvgPerTxn = stat.Total / float64(stat.Count)
+		stats = append(stats, *stat)
+	}
+
+	// Sort by most negative total (highest impact)
+	sort.Slice(stats, func(i, j int) bool {
+		return stats[i].Total < stats[j].Total
+	})
+
+	// Print top N
+	if len(stats) > 0 {
+		fmt.Println("💸 Top Expense Tags (High Impact):")
+		limit := topN
+		if len(stats) < topN {
+			limit = len(stats)
+		}
+		for i := 0; i < limit; i++ {
+			s := stats[i]
+			fmt.Printf("  [%s] Total: %.2f | Count: %d | Avg: %.2f\n", s.Tag, s.Total, s.Count, s.AvgPerTxn)
+		}
+		fmt.Println()
 	}
 }
 
@@ -455,52 +540,108 @@ func exportProjectionMarkdown(p Projection, filename string) error {
 		}
 	}
 
-	w("\n## Transactions by Date\n\n")
-
-	// Group transactions by date
-	byDate := map[string][]struct {
-		Original  Transaction
-		Projected Transaction
-	}{}
-
-	for i := range p.Original {
-		dateStr := p.Original[i].Date.Format("2006-01-02")
-		byDate[dateStr] = append(byDate[dateStr], struct {
-			Original  Transaction
-			Projected Transaction
-		}{
-			Original:  p.Original[i],
-			Projected: p.Projected[i],
-		})
+	// Compute high impact tags (expenses only)
+	type tagStats struct {
+		Tag       string
+		Total     float64
+		Count     int
+		AvgPerTxn float64
 	}
 
-	// Sorted date keys
-	var dates []string
-	for d := range byDate {
-		dates = append(dates, d)
-	}
-	sort.Strings(dates)
+	tagData := make(map[string]*tagStats)
 
-	for _, date := range dates {
-		w("### %s\n\n", date)
-		w("| Description | Original | Projected | Tags |\n")
-		w("|-------------|----------|-----------|------|\n")
-
-		for _, pair := range byDate[date] {
-			o := pair.Original
-			pj := pair.Projected
-
-			// Use projected amount if it differs
-			tags := strings.Join(o.Tags, ", ")
-			w("| %s | %.2f | %.2f | %s |\n",
-				o.Description,
-				abs(o.Amount),
-				abs(pj.Amount),
-				tags,
-			)
+	for _, txn := range p.Original {
+		if txn.Amount >= 0 {
+			continue // Skip income
 		}
-		w("\n")
+		tags := txn.Tags
+		if len(tags) == 0 {
+			tags = []string{"_untagged_"}
+		}
+		for _, tag := range tags {
+			if stat, exists := tagData[tag]; exists {
+				stat.Total += txn.Amount
+				stat.Count++
+			} else {
+				tagData[tag] = &tagStats{
+					Tag:   tag,
+					Total: txn.Amount,
+					Count: 1,
+				}
+			}
+		}
 	}
+
+	var stats []tagStats
+	for _, stat := range tagData {
+		stat.AvgPerTxn = stat.Total / float64(stat.Count)
+		stats = append(stats, *stat)
+	}
+
+	// Sort by most negative total
+	sort.Slice(stats, func(i, j int) bool {
+		return stats[i].Total < stats[j].Total
+	})
+
+	w("\n## 💸 Top Expense Tags (High Impact)\n\n")
+	w("| Tag | Total | Count | Avg per Transaction |\n")
+	w("|-----|--------|--------|---------------------|\n")
+
+	topN := 10
+	if len(stats) < topN {
+		topN = len(stats)
+	}
+	for i := 0; i < topN; i++ {
+		s := stats[i]
+		w("| %s | %.2f | %d | %.2f |\n", s.Tag, s.Total, s.Count, s.AvgPerTxn)
+	}
+
+	// w("\n## Transactions by Date\n\n")
+	//
+	// // Group transactions by date
+	// byDate := map[string][]struct {
+	// 	Original  Transaction
+	// 	Projected Transaction
+	// }{}
+	//
+	// for i := range p.Original {
+	// 	dateStr := p.Original[i].Date.Format("2006-01-02")
+	// 	byDate[dateStr] = append(byDate[dateStr], struct {
+	// 		Original  Transaction
+	// 		Projected Transaction
+	// 	}{
+	// 		Original:  p.Original[i],
+	// 		Projected: p.Projected[i],
+	// 	})
+	// }
+	//
+	// // Sorted date keys
+	// var dates []string
+	// for d := range byDate {
+	// 	dates = append(dates, d)
+	// }
+	// sort.Strings(dates)
+	//
+	// for _, date := range dates {
+	// 	w("### %s\n\n", date)
+	// 	w("| Description | Original | Projected | Tags |\n")
+	// 	w("|-------------|----------|-----------|------|\n")
+	//
+	// 	for _, pair := range byDate[date] {
+	// 		o := pair.Original
+	// 		pj := pair.Projected
+	//
+	// 		// Use projected amount if it differs
+	// 		tags := strings.Join(o.Tags, ", ")
+	// 		w("| %s | %.2f | %.2f | %s |\n",
+	// 			o.Description,
+	// 			abs(o.Amount),
+	// 			abs(pj.Amount),
+	// 			tags,
+	// 		)
+	// 	}
+	// 	w("\n")
+	// }
 
 	return nil
 }
